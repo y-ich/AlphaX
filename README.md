@@ -1,2 +1,2 @@
-# AlphaX
-A reinforcement framework with Monte Carlo Tree Search
+# AlphaZero
+A reinforcement framework which starts with DeepMind's pseudocode.py
