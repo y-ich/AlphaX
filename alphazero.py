@@ -1,8 +1,9 @@
+# Python2のコードでしたが、type hintを通すためにPython3に直しました。
 """Pseudocode description of the AlphaZero algorithm."""
 
 
-from __future__ import google_type_annotations
-from __future__ import division
+#from __future__ import google_type_annotations
+#from __future__ import division
 
 import math
 import numpy
@@ -18,18 +19,30 @@ class AlphaZeroConfig(object):
   def __init__(self):
     ### Self-Play
     self.num_actors = 5000
+    # 5,000台のTPUを使って自己対戦をさせてます。
 
     self.num_sampling_moves = 30
+    # 30手まではMCTSプレイアウト数に比例した確率で着手を選択します。
+
     self.max_moves = 512  # for chess and shogi, 722 for Go.
+    # 手数が長い場合、チェス,将棋は引き分け、囲碁はTromp-Taylorルールスコアに従います。
+    # なので囲碁の場合、無勝負形はコミとアゲハマの差で決まる？それとも無勝負は別途判定？
+
     self.num_simulations = 800
 
     # Root prior exploration noise.
     self.root_dirichlet_alpha = 0.3  # for chess, 0.03 for Go and 0.15 for shogi.
     self.root_exploration_fraction = 0.25
+    # ルートノードではポリシー確率に事実上1点ランダムな着手を確率0.25増しにしてMCTSを行います。
+    # 事実上というのはalphaがこのように1より小さい場合原点付近の非常に鋭利な関数になるからです。
+    # AlphaGo Leeが第4局で負けた教訓で、ポリシー確率の低い手を打たれてもMCTSがそれを咎める手を探せるように訓練します。
 
     # UCB formula
     self.pb_c_base = 19652
     self.pb_c_init = 1.25
+    # AlphaZeroではCpuctがプレイアウト数に依存する関数になりました。
+    # 定数だとプレイアウト数がある程度大きくなるとこの項の効果がなくなってしまい、
+    # プレイアウトを増やしても手があまり変わらなくなる性質を抑制するためと思われます。
 
     ### Training
     self.training_steps = int(700e3)
@@ -83,7 +96,7 @@ class Game(object):
 
   def legal_actions(self):
     # Game specific calculation of legal actions.
-    return []
+    return ["pass"]
 
   def clone(self):
     return Game(list(self.history))
@@ -92,7 +105,7 @@ class Game(object):
     self.history.append(action)
 
   def store_search_statistics(self, root):
-    sum_visits = sum(child.visit_count for child in root.children.itervalues())
+    sum_visits = sum(child.visit_count for child in root.children.values())
     self.child_visits.append([
         root.children[a].visit_count / sum_visits if a in root.children else 0
         for a in range(self.num_actions)
@@ -136,7 +149,7 @@ class ReplayBuffer(object):
 class Network(object):
 
   def inference(self, image):
-    return (-1, {})  # Value, Policy
+    return (-1, {"pass": 1.0 })  # Value, Policy
 
   def get_weights(self):
     # Returns the weights of this network.
@@ -150,7 +163,7 @@ class SharedStorage(object):
 
   def latest_network(self) -> Network:
     if self._networks:
-      return self._networks[max(self._networks.iterkeys())]
+      return self._networks[max(self._networks.keys())]
     else:
       return make_uniform_network()  # policy -> uniform, value -> 0.5
 
@@ -227,12 +240,16 @@ def run_mcts(config: AlphaZeroConfig, game: Game, network: Network):
 
     value = evaluate(node, scratch_game, network)
     backpropagate(search_path, value, scratch_game.to_play())
+    # search_pathにevaluteしたnodeが含まれていません。
+    # 論文の記述と違いますね。
+    # この擬似コードではvalueの初期値は(親のvalueではなく)0になります。
+
   return select_action(config, game, root), root
 
 
 def select_action(config: AlphaZeroConfig, game: Game, root: Node):
   visit_counts = [(child.visit_count, action)
-                  for action, child in root.children.iteritems()]
+                  for action, child in root.children.items()]
   if len(game.history) < config.num_sampling_moves:
     _, action = softmax_sample(visit_counts)
   else:
@@ -243,7 +260,7 @@ def select_action(config: AlphaZeroConfig, game: Game, root: Node):
 # Select the child with the highest UCB score.
 def select_child(config: AlphaZeroConfig, node: Node):
   _, action, child = max((ucb_score(config, node, child), action, child)
-                         for action, child in node.children.iteritems())
+                         for action, child in node.children.items())
   return action, child
 
 
@@ -266,8 +283,8 @@ def evaluate(node: Node, game: Game, network: Network):
   # Expand the node.
   node.to_play = game.to_play()
   policy = {a: math.exp(policy_logits[a]) for a in game.legal_actions()}
-  policy_sum = sum(policy.itervalues())
-  for action, p in policy.iteritems():
+  policy_sum = sum(policy.values())
+  for action, p in policy.items():
     node.children[action] = Node(p / policy_sum)
   return value
 
@@ -277,6 +294,8 @@ def evaluate(node: Node, game: Game, network: Network):
 def backpropagate(search_path: List[Node], value: float, to_play):
   for node in search_path:
     node.value_sum += value if node.to_play == to_play else (1 - value)
+    # valueは0から1ではなく-1から1なのでここはバグってますね。以下が正しいはずです。
+    # node.value_sum += value if node.to_play == to_play else -value
     node.visit_count += 1
 
 
@@ -346,3 +365,6 @@ def launch_job(f, *args):
 
 def make_uniform_network():
   return Network()
+
+config = AlphaZeroConfig()
+alphazero(config)
